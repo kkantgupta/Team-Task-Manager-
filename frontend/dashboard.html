@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — TaskFlow</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div class="app-layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar">
+      <h2>Dashboard</h2>
+      <div class="topbar-actions">
+        <a href="projects.html" class="btn btn-primary btn-sm">+ New Project</a>
+      </div>
+    </div>
+    <div class="content" id="content">
+      <div style="text-align:center;padding:60px"><span class="spinner"></span></div>
+    </div>
+  </main>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+if (!API.requireAuth()) throw '';
+renderSidebar('dashboard');
+
+async function load() {
+  const { ok, data } = await API.get('/tasks/dashboard');
+  if (!ok) return;
+
+  const { stats, overdue, recent } = data;
+  const user = API.currentUser();
+
+  document.getElementById('content').innerHTML = `
+    <h3 style="font-size:18px;font-weight:700;margin-bottom:6px">Welcome back, ${user.name} 👋</h3>
+    <p class="text-muted" style="margin-bottom:24px">Here's your task overview</p>
+
+    <div class="stats-grid">
+      <div class="stat-card total">
+        <span class="stat-label">Total Tasks</span>
+        <span class="stat-value">${stats.total}</span>
+      </div>
+      <div class="stat-card todo">
+        <span class="stat-label">To Do</span>
+        <span class="stat-value">${stats.todo}</span>
+      </div>
+      <div class="stat-card progress">
+        <span class="stat-label">In Progress</span>
+        <span class="stat-value">${stats.in_progress}</span>
+      </div>
+      <div class="stat-card done">
+        <span class="stat-label">Done</span>
+        <span class="stat-value">${stats.done}</span>
+      </div>
+      <div class="stat-card overdue">
+        <span class="stat-label">Overdue</span>
+        <span class="stat-value">${stats.overdue}</span>
+      </div>
+    </div>
+
+    ${overdue.length ? `
+    <div class="card mb-4" style="margin-bottom:20px">
+      <div class="card-header">
+        <h3>⚠️ Overdue Tasks (${overdue.length})</h3>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Project</th><th>Assigned To</th><th>Due</th><th>Priority</th><th>Action</th></tr></thead>
+          <tbody>
+            ${overdue.map(t => `
+              <tr>
+                <td><strong>${t.title}</strong></td>
+                <td><a href="tasks.html?project=${t.project_id}">${t.project_name}</a></td>
+                <td>${t.assignee_name || '—'}</td>
+                <td><span class="badge badge-overdue">${formatDate(t.due_date)}</span></td>
+                <td>${badgePriority(t.priority)}</td>
+                <td><button class="btn btn-sm btn-outline" onclick="markDone(${t.id}, this)">Mark Done</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-header">
+        <h3>Recent Tasks</h3>
+        <a href="tasks.html" class="btn btn-sm btn-secondary">View All</a>
+      </div>
+      ${recent.length === 0 ? `
+        <div class="empty-state">
+          <h3>No tasks yet</h3>
+          <p>Create a project and add tasks to get started.</p>
+        </div>
+      ` : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Task</th><th>Project</th><th>Status</th><th>Priority</th><th>Due</th></tr></thead>
+            <tbody>
+              ${recent.map(t => `
+                <tr>
+                  <td><strong>${t.title}</strong></td>
+                  <td><a href="tasks.html?project=${t.project_id}">${t.project_name}</a></td>
+                  <td>${badgeStatus(t.status)}</td>
+                  <td>${badgePriority(t.priority)}</td>
+                  <td class="${isOverdue(t.due_date, t.status) ? 'badge-overdue' : ''}">${formatDate(t.due_date)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+async function markDone(taskId, btn) {
+  btn.disabled = true;
+  const { ok } = await API.patch(`/tasks/${taskId}/status`, { status: 'done' });
+  if (ok) { showToast('Task marked as done!'); load(); }
+  else { btn.disabled = false; showToast('Failed to update', 'error'); }
+}
+
+load();
+</script>
+</body>
+</html>

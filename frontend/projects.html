@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Projects — TaskFlow</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div class="app-layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar">
+      <h2>Projects</h2>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" onclick="openCreateProject()">+ New Project</button>
+      </div>
+    </div>
+    <div class="content">
+      <div id="projectGrid" class="grid-cards">
+        <div style="text-align:center;padding:60px;grid-column:1/-1"><span class="spinner"></span></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+if (!API.requireAuth()) throw '';
+renderSidebar('projects');
+
+let allUsers = [];
+
+async function load() {
+  const [projRes, userRes] = await Promise.all([
+    API.get('/projects'),
+    API.get('/auth/users')
+  ]);
+
+  if (userRes.ok) allUsers = userRes.data.users;
+
+  const grid = document.getElementById('projectGrid');
+  if (!projRes.ok) { grid.innerHTML = '<p class="text-muted">Failed to load projects.</p>'; return; }
+
+  const { projects } = projRes.data;
+  if (!projects.length) {
+    grid.innerHTML = `
+      <div class="empty-state" style="grid-column:1/-1">
+        <h3>No projects yet</h3>
+        <p>Create your first project to get started</p>
+        <button class="btn btn-primary mt-2" onclick="openCreateProject()" style="margin-top:16px">+ New Project</button>
+      </div>`;
+    return;
+  }
+
+  grid.innerHTML = projects.map(p => `
+    <div class="project-card" onclick="window.location.href='tasks.html?project=${p.id}'">
+      <h3>${p.name}</h3>
+      <p>${p.description || 'No description'}</p>
+      <div class="project-meta">
+        <span>&#128197; ${new Date(p.created_at).toLocaleDateString('en-US', {month:'short',day:'numeric'})}</span>
+        <span>&#9989; ${p.task_count} tasks</span>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:6px;justify-content:flex-end" onclick="event.stopPropagation()">
+        <button class="btn btn-sm btn-secondary" onclick="openManageMembers(${p.id}, '${p.name.replace(/'/g,"\\'")}')">Members</button>
+        <button class="btn btn-sm btn-outline" onclick="openEditProject(${p.id}, '${p.name.replace(/'/g,"\\'")}', \`${(p.description||'').replace(/`/g,'\\`')}\`)">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id}, '${p.name.replace(/'/g,"\\'")}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openCreateProject() {
+  showModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <h3>New Project</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="modalAlert" class="alert alert-error hidden"></div>
+        <div class="form-group">
+          <label>Project Name *</label>
+          <input id="pName" class="form-control" placeholder="e.g. Website Redesign" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="pDesc" class="form-control" placeholder="What is this project about?"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="createProject()">Create Project</button>
+      </div>
+    </div>
+  `);
+}
+
+async function createProject() {
+  const name = document.getElementById('pName').value.trim();
+  const desc = document.getElementById('pDesc').value.trim();
+  if (!name) { document.getElementById('modalAlert').textContent = 'Name is required'; document.getElementById('modalAlert').classList.remove('hidden'); return; }
+
+  const { ok, data } = await API.post('/projects', { name, description: desc });
+  if (!ok) { document.getElementById('modalAlert').textContent = data.error; document.getElementById('modalAlert').classList.remove('hidden'); return; }
+
+  closeModal(); showToast('Project created!'); load();
+}
+
+function openEditProject(id, name, desc) {
+  showModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Edit Project</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="modalAlert" class="alert alert-error hidden"></div>
+        <div class="form-group">
+          <label>Project Name *</label>
+          <input id="pName" class="form-control" value="${name}" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="pDesc" class="form-control">${desc}</textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="updateProject(${id})">Save Changes</button>
+      </div>
+    </div>
+  `);
+}
+
+async function updateProject(id) {
+  const name = document.getElementById('pName').value.trim();
+  const desc = document.getElementById('pDesc').value.trim();
+  if (!name) { document.getElementById('modalAlert').textContent = 'Name is required'; document.getElementById('modalAlert').classList.remove('hidden'); return; }
+  const { ok, data } = await API.put(`/projects/${id}`, { name, description: desc });
+  if (!ok) { document.getElementById('modalAlert').textContent = data.error; document.getElementById('modalAlert').classList.remove('hidden'); return; }
+  closeModal(); showToast('Project updated!'); load();
+}
+
+async function deleteProject(id, name) {
+  if (!confirm(`Delete project "${name}"? This will also delete all tasks.`)) return;
+  const { ok } = await API.del(`/projects/${id}`);
+  if (ok) { showToast('Project deleted'); load(); }
+  else showToast('Failed to delete', 'error');
+}
+
+async function openManageMembers(projectId, projectName) {
+  const { ok, data } = await API.get(`/projects/${projectId}`);
+  if (!ok) return showToast('Could not load members', 'error');
+
+  const { members } = data;
+  const nonMembers = allUsers.filter(u => !members.find(m => m.id === u.id));
+
+  showModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Members — ${projectName}</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <h4 style="font-size:13px;font-weight:600;margin-bottom:10px">Current Members</h4>
+        <div id="memberList">
+          ${members.map(m => `
+            <div class="flex items-center gap-2" style="padding:8px 0;border-bottom:1px solid var(--gray-100);justify-content:space-between">
+              <div class="flex items-center gap-2">
+                <div class="avatar" style="width:28px;height:28px;font-size:12px">${m.name.charAt(0)}</div>
+                <div>
+                  <strong style="font-size:13px">${m.name}</strong>
+                  <span class="badge-role ${m.role}" style="margin-left:6px">${m.role}</span>
+                </div>
+              </div>
+              <button class="btn btn-sm btn-danger" onclick="removeMember(${projectId}, ${m.id})">Remove</button>
+            </div>
+          `).join('') || '<p class="text-muted">No members</p>'}
+        </div>
+        ${nonMembers.length ? `
+          <hr class="divider" />
+          <h4 style="font-size:13px;font-weight:600;margin-bottom:10px">Add Member</h4>
+          <div class="flex gap-2">
+            <select id="addUserId" class="form-control">
+              ${nonMembers.map(u => `<option value="${u.id}">${u.name} (${u.email})</option>`).join('')}
+            </select>
+            <select id="addUserRole" class="form-control" style="max-width:120px">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button class="btn btn-primary" onclick="addMember(${projectId})">Add</button>
+          </div>
+        ` : '<p class="text-muted mt-2">All users are already members.</p>'}
+      </div>
+    </div>
+  `);
+}
+
+async function addMember(projectId) {
+  const userId = document.getElementById('addUserId').value;
+  const role = document.getElementById('addUserRole').value;
+  const { ok, data } = await API.post(`/projects/${projectId}/members`, { userId: parseInt(userId), role });
+  if (!ok) return showToast(data.error || 'Failed to add member', 'error');
+  showToast('Member added!');
+  const proj = document.querySelector('.modal-header h3').textContent.split(' — ')[1];
+  openManageMembers(projectId, proj);
+  load();
+}
+
+async function removeMember(projectId, userId) {
+  if (!confirm('Remove this member from the project?')) return;
+  const { ok, data } = await API.del(`/projects/${projectId}/members/${userId}`);
+  if (!ok) return showToast(data.error || 'Failed to remove', 'error');
+  showToast('Member removed');
+  const proj = document.querySelector('.modal-header h3').textContent.split(' — ')[1];
+  openManageMembers(projectId, proj);
+  load();
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tasks — TaskFlow</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div class="app-layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar">
+      <h2 id="pageTitle">Tasks</h2>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" id="addTaskBtn" style="display:none" onclick="openCreateTask()">+ Add Task</button>
+      </div>
+    </div>
+    <div class="content">
+      <!-- Project selector for non-project view -->
+      <div id="projectSelector" class="form-group" style="max-width:360px;display:none">
+        <label>Select Project</label>
+        <select id="projectSelect" class="form-control" onchange="onProjectChange()">
+          <option value="">— Choose a project —</option>
+        </select>
+      </div>
+
+      <div class="filter-bar" id="filterBar" style="display:none">
+        <select id="filterStatus" class="form-control" style="width:auto" onchange="applyFilters()">
+          <option value="">All Status</option>
+          <option value="todo">To Do</option>
+          <option value="in_progress">In Progress</option>
+          <option value="done">Done</option>
+        </select>
+        <select id="filterPriority" class="form-control" style="width:auto" onchange="applyFilters()">
+          <option value="">All Priority</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <select id="filterAssignee" class="form-control" style="width:auto" onchange="applyFilters()">
+          <option value="">All Assignees</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="resetFilters()">Reset</button>
+      </div>
+
+      <div id="tasksContainer">
+        <div style="text-align:center;padding:60px"><span class="spinner"></span></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+if (!API.requireAuth()) throw '';
+renderSidebar('tasks');
+
+const params = new URLSearchParams(window.location.search);
+let currentProjectId = params.get('project') ? parseInt(params.get('project')) : null;
+let allTasks = [];
+let projectMembers = [];
+let allProjects = [];
+const user = API.currentUser();
+
+async function init() {
+  const projRes = await API.get('/projects');
+  if (!projRes.ok) return;
+  allProjects = projRes.data.projects;
+
+  if (!currentProjectId) {
+    const sel = document.getElementById('projectSelector');
+    const selectEl = document.getElementById('projectSelect');
+    sel.style.display = 'block';
+    selectEl.innerHTML = '<option value="">— Choose a project —</option>' +
+      allProjects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+
+    document.getElementById('tasksContainer').innerHTML = `
+      <div class="empty-state">
+        <h3>Select a project</h3>
+        <p>Choose a project above to view and manage its tasks.</p>
+      </div>`;
+    return;
+  }
+
+  await loadTasks();
+}
+
+async function onProjectChange() {
+  const v = document.getElementById('projectSelect').value;
+  if (!v) return;
+  currentProjectId = parseInt(v);
+  await loadTasks();
+}
+
+async function loadTasks() {
+  const project = allProjects.find(p => p.id === currentProjectId);
+  if (project) {
+    document.getElementById('pageTitle').textContent = project.name + ' — Tasks';
+  }
+
+  document.getElementById('addTaskBtn').style.display = 'inline-flex';
+  document.getElementById('filterBar').style.display = 'flex';
+  document.getElementById('tasksContainer').innerHTML = '<div style="text-align:center;padding:40px"><span class="spinner"></span></div>';
+
+  const [taskRes, memberRes] = await Promise.all([
+    API.get(`/tasks/project/${currentProjectId}`),
+    API.get(`/projects/${currentProjectId}`)
+  ]);
+
+  if (!taskRes.ok) {
+    document.getElementById('tasksContainer').innerHTML = '<p class="text-muted">Could not load tasks.</p>';
+    return;
+  }
+
+  allTasks = taskRes.data.tasks;
+  projectMembers = memberRes.ok ? memberRes.data.members : [];
+
+  const assigneeFilter = document.getElementById('filterAssignee');
+  assigneeFilter.innerHTML = '<option value="">All Assignees</option>' +
+    projectMembers.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+
+  renderTasks(allTasks);
+}
+
+function applyFilters() {
+  const status = document.getElementById('filterStatus').value;
+  const priority = document.getElementById('filterPriority').value;
+  const assignee = document.getElementById('filterAssignee').value;
+
+  let filtered = allTasks;
+  if (status) filtered = filtered.filter(t => t.status === status);
+  if (priority) filtered = filtered.filter(t => t.priority === priority);
+  if (assignee) filtered = filtered.filter(t => String(t.assignee_id) === assignee);
+
+  renderTasks(filtered);
+}
+
+function resetFilters() {
+  document.getElementById('filterStatus').value = '';
+  document.getElementById('filterPriority').value = '';
+  document.getElementById('filterAssignee').value = '';
+  renderTasks(allTasks);
+}
+
+function renderTasks(tasks) {
+  const container = document.getElementById('tasksContainer');
+
+  if (!tasks.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <h3>No tasks found</h3>
+        <p>Add a task to get started, or adjust your filters.</p>
+      </div>`;
+    return;
+  }
+
+  const groups = { todo: [], in_progress: [], done: [] };
+  tasks.forEach(t => { if (groups[t.status]) groups[t.status].push(t); });
+
+  const labels = { todo: 'To Do', in_progress: 'In Progress', done: 'Done' };
+  const colors = { todo: 'var(--gray-400)', in_progress: 'var(--primary)', done: 'var(--success)' };
+
+  container.innerHTML = Object.keys(groups).map(status => `
+    <div style="margin-bottom:28px">
+      <div class="flex items-center gap-2" style="margin-bottom:12px">
+        <span style="width:10px;height:10px;border-radius:50%;background:${colors[status]};display:inline-block"></span>
+        <h3 style="font-size:15px;font-weight:600">${labels[status]}</h3>
+        <span class="text-muted">(${groups[status].length})</span>
+      </div>
+      ${groups[status].length === 0 ? '<p class="text-muted" style="margin-left:22px;font-size:13px">No tasks</p>' :
+        `<div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Title</th><th>Assignee</th><th>Priority</th><th>Due</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${groups[status].map(t => `
+                  <tr>
+                    <td>
+                      <strong>${t.title}</strong>
+                      ${t.description ? `<div class="text-muted" style="font-size:12px;margin-top:2px">${t.description.slice(0,80)}${t.description.length > 80 ? '…' : ''}</div>` : ''}
+                    </td>
+                    <td>${t.assignee_name || '<span class="text-muted">Unassigned</span>'}</td>
+                    <td>${badgePriority(t.priority)}</td>
+                    <td class="${isOverdue(t.due_date, t.status) ? '' : ''}">
+                      ${isOverdue(t.due_date, t.status) ? `<span class="badge badge-overdue">${formatDate(t.due_date)}</span>` : formatDate(t.due_date)}
+                    </td>
+                    <td>
+                      <div class="flex gap-2">
+                        <select class="form-control" style="width:130px;padding:4px 8px;font-size:12px" onchange="quickStatus(${t.id}, this.value)">
+                          <option value="todo" ${t.status==='todo'?'selected':''}>To Do</option>
+                          <option value="in_progress" ${t.status==='in_progress'?'selected':''}>In Progress</option>
+                          <option value="done" ${t.status==='done'?'selected':''}>Done</option>
+                        </select>
+                        <button class="btn btn-sm btn-outline" onclick="openEditTask(${t.id})">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteTask(${t.id}, '${t.title.replace(/'/g,"\\'")}')">Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>`
+      }
+    </div>
+  `).join('');
+}
+
+async function quickStatus(taskId, status) {
+  const { ok } = await API.patch(`/tasks/${taskId}/status`, { status });
+  if (ok) { showToast('Status updated'); await loadTasks(); applyFilters(); }
+  else showToast('Failed to update status', 'error');
+}
+
+function openCreateTask() {
+  const membersOptions = projectMembers.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+  showModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Task</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="modalAlert" class="alert alert-error hidden"></div>
+        <div class="form-group">
+          <label>Title *</label>
+          <input id="tTitle" class="form-control" placeholder="Task title" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="tDesc" class="form-control" placeholder="Optional description"></textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Priority</label>
+            <select id="tPriority" class="form-control">
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Due Date</label>
+            <input type="date" id="tDue" class="form-control" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Assign To</label>
+          <select id="tAssignee" class="form-control">
+            <option value="">Unassigned</option>
+            ${membersOptions}
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="createTask()">Create Task</button>
+      </div>
+    </div>
+  `);
+}
+
+async function createTask() {
+  const title = document.getElementById('tTitle').value.trim();
+  if (!title) {
+    document.getElementById('modalAlert').textContent = 'Title is required';
+    document.getElementById('modalAlert').classList.remove('hidden');
+    return;
+  }
+  const body = {
+    title,
+    description: document.getElementById('tDesc').value.trim() || undefined,
+    priority: document.getElementById('tPriority').value,
+    due_date: document.getElementById('tDue').value || undefined,
+    assignee_id: document.getElementById('tAssignee').value ? parseInt(document.getElementById('tAssignee').value) : undefined
+  };
+  const { ok, data } = await API.post(`/tasks/project/${currentProjectId}`, body);
+  if (!ok) {
+    document.getElementById('modalAlert').textContent = data.error;
+    document.getElementById('modalAlert').classList.remove('hidden');
+    return;
+  }
+  closeModal(); showToast('Task created!'); await loadTasks(); applyFilters();
+}
+
+async function openEditTask(taskId) {
+  const { ok, data } = await API.get(`/tasks/${taskId}`);
+  if (!ok) return showToast('Could not load task', 'error');
+  const t = data.task;
+  const membersOptions = projectMembers.map(m =>
+    `<option value="${m.id}" ${t.assignee_id === m.id ? 'selected' : ''}>${m.name}</option>`
+  ).join('');
+
+  showModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Edit Task</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="modalAlert" class="alert alert-error hidden"></div>
+        <div class="form-group">
+          <label>Title *</label>
+          <input id="tTitle" class="form-control" value="${t.title}" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="tDesc" class="form-control">${t.description || ''}</textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Status</label>
+            <select id="tStatus" class="form-control">
+              <option value="todo" ${t.status==='todo'?'selected':''}>To Do</option>
+              <option value="in_progress" ${t.status==='in_progress'?'selected':''}>In Progress</option>
+              <option value="done" ${t.status==='done'?'selected':''}>Done</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Priority</label>
+            <select id="tPriority" class="form-control">
+              <option value="high" ${t.priority==='high'?'selected':''}>High</option>
+              <option value="medium" ${t.priority==='medium'?'selected':''}>Medium</option>
+              <option value="low" ${t.priority==='low'?'selected':''}>Low</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Due Date</label>
+            <input type="date" id="tDue" class="form-control" value="${t.due_date || ''}" />
+          </div>
+          <div class="form-group">
+            <label>Assign To</label>
+            <select id="tAssignee" class="form-control">
+              <option value="">Unassigned</option>
+              ${membersOptions}
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="updateTask(${t.id})">Save Changes</button>
+      </div>
+    </div>
+  `);
+}
+
+async function updateTask(id) {
+  const title = document.getElementById('tTitle').value.trim();
+  if (!title) {
+    document.getElementById('modalAlert').textContent = 'Title is required';
+    document.getElementById('modalAlert').classList.remove('hidden');
+    return;
+  }
+  const body = {
+    title,
+    description: document.getElementById('tDesc').value.trim() || null,
+    status: document.getElementById('tStatus').value,
+    priority: document.getElementById('tPriority').value,
+    due_date: document.getElementById('tDue').value || null,
+    assignee_id: document.getElementById('tAssignee').value ? parseInt(document.getElementById('tAssignee').value) : null
+  };
+  const { ok, data } = await API.put(`/tasks/${id}`, body);
+  if (!ok) {
+    document.getElementById('modalAlert').textContent = data.error;
+    document.getElementById('modalAlert').classList.remove('hidden');
+    return;
+  }
+  closeModal(); showToast('Task updated!'); await loadTasks(); applyFilters();
+}
+
+async function deleteTask(id, title) {
+  if (!confirm(`Delete task "${title}"?`)) return;
+  const { ok } = await API.del(`/tasks/${id}`);
+  if (ok) { showToast('Task deleted'); await loadTasks(); applyFilters(); }
+  else showToast('Failed to delete task', 'error');
+}
+
+init();
+</script>
+</body>
+</html>
