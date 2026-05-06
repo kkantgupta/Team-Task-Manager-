@@ -1,2 +1,4 @@
 node_modules/
 backend/node_modules/
+*.db-wal
+*.db-shm
